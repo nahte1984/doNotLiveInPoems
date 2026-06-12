@@ -36,11 +36,28 @@
             pointer-events: none;
             transition: opacity 0.5s ease;
         }
+        #start-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: #313131;
+            z-index: 100;
+            display: none; /* 預設隱藏，等字型載入後顯示 */
+            justify-content: center;
+            align-items: center;
+            color: #e584b4;
+            font-size: 20pt;
+            cursor: pointer;
+            transition: opacity 0.5s ease;
+        }
     </style>
 </head>
 <body>
 
     <div id="loading">載入中...</div>
+    <div id="start-overlay">點擊畫面開始體驗</div>
     <canvas id="world"></canvas>
 
     <script>
@@ -58,6 +75,11 @@
 
         const engine = Engine.create();
         const world = engine.world;
+
+        // 修正：將物理引擎的預設重力設定與陀螺儀的小重力同步，避免初始載入時過度拉扯下墜
+        engine.gravity.x = 0;
+        engine.gravity.y = 0.2;
+
         const canvas = document.getElementById('world');
         const ctx = canvas.getContext('2d');
 
@@ -84,18 +106,8 @@
         const lineGap = isMobile ? 22 : 28; // 句子間隔
         const colWidth = fontSize + lineGap;
 
-        let hasRequestedDeviceOrientation = false;
-
-        // 如果裝置不需手動請求權限 (例如 Android 或一般桌機)，直接預先監聽陀螺儀
-        if (window.DeviceOrientationEvent && typeof DeviceOrientationEvent.requestPermission !== 'function') {
-            window.addEventListener('deviceorientation', handleOrientation);
-            hasRequestedDeviceOrientation = true;
-        }
-
         // 初始化場景
         function init() {
-            document.getElementById('loading').style.opacity = '0';
-
             // 建立每個字元的物理剛體與約束 (繩索效果)
             for (let i = 0; i < originalSentences.length; i++) {
                 let text = originalSentences[i];
@@ -123,7 +135,7 @@
                             bodyA: prevBody,
                             bodyB: body,
                             length: fontSize * 0.9,
-                            stiffness: 0.1, // 大幅降低繩子硬度，變得更柔順
+                            stiffness: 0.5, // 修正：稍微提高硬度以避免重力導致異常下墜，但保留足夠的柔順感
                             damping: 0.05 // 繩子阻尼
                         });
                         constraints.push(constraint);
@@ -187,20 +199,6 @@
 
         // 點擊螢幕觸發功能 (包含要求 iOS 陀螺儀權限)
         function handleScreenClick() {
-            if (!hasRequestedDeviceOrientation && typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
-                DeviceOrientationEvent.requestPermission()
-                    .then(permissionState => {
-                        if (permissionState === 'granted') {
-                            window.addEventListener('deviceorientation', handleOrientation);
-                        }
-                    })
-                    .catch(console.error);
-                hasRequestedDeviceOrientation = true;
-            } else if (!hasRequestedDeviceOrientation) {
-                window.addEventListener('deviceorientation', handleOrientation);
-                hasRequestedDeviceOrientation = true;
-            }
-
             shuffleArray(currentOrder);
             updateLayout();
         }
@@ -343,9 +341,39 @@
             requestAnimationFrame(renderLoop);
         }
 
-        // 確保 Google 字型載入完畢後再啟動物理引擎與繪製，避免畫面出現預設字體
+        // 啟動流程與權限獲取
+        function startExperience() {
+            const overlay = document.getElementById('start-overlay');
+            
+            // 要求 iOS 陀螺儀權限 (必須由使用者點擊觸發)
+            if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+                DeviceOrientationEvent.requestPermission()
+                    .then(permissionState => {
+                        if (permissionState === 'granted') {
+                            window.addEventListener('deviceorientation', handleOrientation);
+                        }
+                        // 隱藏開始畫面並啟動
+                        overlay.style.opacity = '0';
+                        setTimeout(() => { overlay.style.display = 'none'; init(); }, 500);
+                    })
+                    .catch(console.error);
+            } else {
+                // Android 或無支援的裝置直接啟動
+                window.addEventListener('deviceorientation', handleOrientation);
+                overlay.style.opacity = '0';
+                setTimeout(() => { overlay.style.display = 'none'; init(); }, 500);
+            }
+        }
+
+        // 確保 Google 字型載入完畢後再顯示啟動畫面
         document.fonts.ready.then(() => {
-            init();
+            document.getElementById('loading').style.display = 'none';
+            
+            const overlay = document.getElementById('start-overlay');
+            overlay.style.display = 'flex';
+            
+            // 綁定第一次點擊啟動事件
+            overlay.addEventListener('click', startExperience, { once: true });
         });
     </script>
 </body>
