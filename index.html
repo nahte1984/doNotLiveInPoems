@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>互動詩句</title>
+    <!-- 引入 Google Fonts: BIZ UDPMincho -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=BIZ+UDPMincho&display=swap" rel="stylesheet">
+    <!-- 引入 Matter.js 物理引擎 -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/matter-js/0.19.0/matter.min.js"></script>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: #e584b4; /* 網頁底色 */
+            touch-action: none; /* 防止在手機上滑動畫面 */
+            font-family: 'BIZ UDPMincho', serif;
+        }
+        #world {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+        #loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: #313131;
+            font-size: 24pt;
+            pointer-events: none;
+            transition: opacity 0.5s ease;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="loading">載入中...</div>
+    <canvas id="world"></canvas>
+
+    <script>
+        // 初始化 Matter.js 模組
+        const Engine = Matter.Engine,
+              Render = Matter.Render,
+              Runner = Matter.Runner,
+              Bodies = Matter.Bodies,
+              Composite = Matter.Composite,
+              Constraint = Matter.Constraint,
+              Mouse = Matter.Mouse,
+              MouseConstraint = Matter.MouseConstraint,
+              Events = Matter.Events,
+              Body = Matter.Body;
+
+        const engine = Engine.create();
+        const world = engine.world;
+        const canvas = document.getElementById('world');
+        const ctx = canvas.getContext('2d');
+
+        // 詩句資料
+        const originalSentences = [
+            "雨水直接打進眼睛",
+            "陽光普照得沒有陰影",
+            "面朝大海，春暖花開",
+            "難就難在生命",
+            "並非詩句",
+            "明明　還有更重要的事情",
+            "我每天想著的淨是",
+            "昨日的天氣"
+        ];
+
+        let linesData = [];
+        let currentOrder = [0, 1, 2, 3, 4, 5, 6, 7];
+
+        const fontSize = 32; // 24pt 大約等於 32px
+        const lineGap = 30; // 句子間隔
+        const colWidth = fontSize + lineGap;
+
+        // 初始化場景
+        function init() {
+            document.getElementById('loading').style.opacity = '0';
+
+            // 建立每個字元的物理剛體與約束 (繩索效果)
+            for (let i = 0; i < originalSentences.length; i++) {
+                let text = originalSentences[i];
+                let bodies = [];
+                let constraints = [];
+                let prevBody = null;
+
+                for (let j = 0; j < text.length; j++) {
+                    let char = text[j];
+                    
+                    // 建立物理節點
+                    let body = Bodies.circle(0, j * fontSize, 14, {
+                        collisionFilter: { group: -1 }, // 設為同群組且負數值，讓所有字不互碰以避免糾纏
+                        frictionAir: 0.04, // 空氣阻力，讓擺動較自然
+                        restitution: 0.2, // 彈性
+                        isStatic: j === 0 // 第一個字固定不動
+                    });
+                    body.char = char;
+                    bodies.push(body);
+                    Composite.add(world, body);
+
+                    // 綁定繩子(關節)
+                    if (prevBody) {
+                        let constraint = Constraint.create({
+                            bodyA: prevBody,
+                            bodyB: body,
+                            length: fontSize * 0.9,
+                            stiffness: 0.8, // 繩子硬度
+                            damping: 0.05 // 繩子阻尼
+                        });
+                        constraints.push(constraint);
+                        Composite.add(world, constraint);
+                    }
+                    prevBody = body;
+                }
+                linesData.push({ bodies, constraints });
+            }
+
+            // 加入滑鼠與觸控拖曳控制
+            const mouse = Mouse.create(canvas);
+            const mouseConstraint = MouseConstraint.create(engine, {
+                mouse: mouse,
+                constraint: {
+                    stiffness: 0.2,
+                    render: { visible: false }
+                }
+            });
+            Composite.add(world, mouseConstraint);
+
+            // 處理 Retina 高解析度螢幕的滑鼠座標修正
+            const pixelRatio = window.devicePixelRatio || 1;
+            mouse.pixelRatio = pixelRatio;
+
+            // 辨識「點擊」與「拖曳」的差別
+            let dragStartPos = null;
+            Events.on(mouseConstraint, 'mousedown', function(event) {
+                dragStartPos = { x: event.mouse.position.x, y: event.mouse.position.y };
+            });
+            
+            Events.on(mouseConstraint, 'mouseup', function(event) {
+                if (!dragStartPos) return;
+                let dx = event.mouse.position.x - dragStartPos.x;
+                let dy = event.mouse.position.y - dragStartPos.y;
+                let dist = Math.sqrt(dx * dx + dy * dy);
+                
+                // 如果移動距離很短，判定為點擊，則亂數打亂順序
+                if (dist < 10) {
+                    handleScreenClick();
+                }
+                dragStartPos = null;
+            });
+
+            // 初始佈局更新
+            updateLayout();
+            window.addEventListener('resize', updateLayout);
+
+            // 啟動物理引擎計算與自定義繪製
+            Runner.run(Runner.create(), engine);
+            requestAnimationFrame(renderLoop);
+        }
+
+        // 陣列亂數排序 (Fisher-Yates Shuffle)
+        function shuffleArray(array) {
+            for (let i = array.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [array[i], array[j]] = [array[j], array[i]];
+            }
+        }
+
+        // 點擊螢幕觸發功能 (包含要求 iOS 陀螺儀權限)
+        let hasRequestedDeviceOrientation = false;
+        function handleScreenClick() {
+            if (!hasRequestedDeviceOrientation && typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+                DeviceOrientationEvent.requestPermission()
+                    .then(permissionState => {
+                        if (permissionState === 'granted') {
+                            window.addEventListener('deviceorientation', handleOrientation);
+                        }
+                    })
+                    .catch(console.error);
+                hasRequestedDeviceOrientation = true;
+            } else if (!hasRequestedDeviceOrientation) {
+                window.addEventListener('deviceorientation', handleOrientation);
+                hasRequestedDeviceOrientation = true;
+            }
+
+            shuffleArray(currentOrder);
+            updateLayout();
+        }
+
+        // 陀螺儀重力處理
+        function handleOrientation(event) {
+            let gx = event.gamma / 45; // 左右傾斜
+            let gy = event.beta / 45;  // 前後傾斜
+
+            // 限制最大重力值
+            gx = Math.max(-1.5, Math.min(1.5, gx));
+            gy = Math.max(-1.5, Math.min(1.5, gy));
+
+            engine.world.gravity.x = gx;
+            engine.world.gravity.y = gy;
+        }
+
+        // 根據直/橫畫面重新排列所有詩句的定位
+        function updateLayout() {
+            const w = window.innerWidth;
+            const h = window.innerHeight;
+            const pixelRatio = window.devicePixelRatio || 1;
+
+            // 設定 Canvas 高清解析度
+            canvas.width = w * pixelRatio;
+            canvas.height = h * pixelRatio;
+            canvas.style.width = w + 'px';
+            canvas.style.height = h + 'px';
+            ctx.scale(pixelRatio, pixelRatio);
+
+            let isPortrait = h >= w;
+
+            if (!isPortrait) {
+                // 橫畫面：8句集中於正中央
+                let totalCols = 8;
+                let totalWidth = totalCols * fontSize + (totalCols - 1) * lineGap;
+                let maxLen = Math.max(...currentOrder.map(i => originalSentences[i].length));
+                let blockHeight = maxLen * fontSize;
+
+                let startX = w / 2 + totalWidth / 2 - fontSize / 2;
+                let startY = h / 2 - blockHeight / 2 + fontSize / 2;
+
+                for (let i = 0; i < 8; i++) {
+                    let lineIdx = currentOrder[i];
+                    let targetX = startX - i * colWidth;
+                    let targetY = startY;
+                    moveLine(lineIdx, targetX, targetY);
+                }
+            } else {
+                // 直畫面：上下兩半，各4句
+                // 上半部 4 句
+                let topGroup = currentOrder.slice(0, 4);
+                let maxLenTop = Math.max(...topGroup.map(i => originalSentences[i].length));
+                let topBlockHeight = maxLenTop * fontSize;
+                let topTotalWidth = 4 * fontSize + 3 * lineGap;
+                let topStartX = w / 2 + topTotalWidth / 2 - fontSize / 2;
+                let topStartY = h / 4 - topBlockHeight / 2 + fontSize / 2;
+
+                for (let i = 0; i < 4; i++) {
+                    let lineIdx = topGroup[i];
+                    let targetX = topStartX - i * colWidth;
+                    let targetY = topStartY;
+                    moveLine(lineIdx, targetX, targetY);
+                }
+
+                // 下半部 4 句
+                let botGroup = currentOrder.slice(4, 8);
+                let maxLenBot = Math.max(...botGroup.map(i => originalSentences[i].length));
+                let botBlockHeight = maxLenBot * fontSize;
+                let botTotalWidth = 4 * fontSize + 3 * lineGap;
+                let botStartX = w / 2 + botTotalWidth / 2 - fontSize / 2;
+                let botStartY = (h * 3) / 4 - botBlockHeight / 2 + fontSize / 2;
+
+                for (let i = 0; i < 4; i++) {
+                    let lineIdx = botGroup[i];
+                    let targetX = botStartX - i * colWidth;
+                    let targetY = botStartY;
+                    moveLine(lineIdx, targetX, targetY);
+                }
+            }
+        }
+
+        // 平順地將整句移動到新位置 (避免約束爆炸)
+        function moveLine(lineIdx, targetX, targetY) {
+            let bodies = linesData[lineIdx].bodies;
+            let anchor = bodies[0];
+            let dx = targetX - anchor.position.x;
+            let dy = targetY - anchor.position.y;
+
+            for (let body of bodies) {
+                Body.setPosition(body, {
+                    x: body.position.x + dx,
+                    y: body.position.y + dy
+                });
+                Body.setVelocity(body, { x: 0, y: 0 }); // 消除亂數調換時產生的暴衝速度
+                Body.setAngularVelocity(body, 0);
+            }
+        }
+
+        // 自定義畫面繪製
+        function renderLoop() {
+            const w = window.innerWidth;
+            const h = window.innerHeight;
+
+            ctx.clearRect(0, 0, w, h);
+
+            // 文字繪製設定
+            ctx.font = '400 24pt "BIZ UDPMincho", serif';
+            ctx.fillStyle = '#313131'; // 文字顏色
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+
+            for (let line of linesData) {
+                for (let body of line.bodies) {
+                    ctx.save();
+                    ctx.translate(body.position.x, body.position.y);
+                    ctx.rotate(body.angle);
+                    ctx.fillText(body.char, 0, 0);
+                    ctx.restore();
+                }
+            }
+            requestAnimationFrame(renderLoop);
+        }
+
+        // 確保 Google 字型載入完畢後再啟動物理引擎與繪製，避免畫面出現預設字體
+        document.fonts.ready.then(() => {
+            init();
+        });
+    </script>
+</body>
+</html>
