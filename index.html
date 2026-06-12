@@ -17,7 +17,7 @@
             width: 100%;
             height: 100%;
             overflow: hidden;
-            background-color: #e584b4; /* 網頁底色 */
+            background-color: #313131; /* 網頁底色修改為深色 */
             touch-action: none; /* 防止在手機上滑動畫面 */
             font-family: 'BIZ UDPMincho', serif;
         }
@@ -31,7 +31,7 @@
             top: 50%;
             left: 50%;
             transform: translate(-50%, -50%);
-            color: #313131;
+            color: #e584b4; /* 文字顏色修改為粉色 */
             font-size: 24pt;
             pointer-events: none;
             transition: opacity 0.5s ease;
@@ -76,9 +76,21 @@
         let linesData = [];
         let currentOrder = [0, 1, 2, 3, 4, 5, 6, 7];
 
-        const fontSize = 32; // 24pt 大約等於 32px
-        const lineGap = 30; // 句子間隔
+        // 判斷是否為手機版並設定文字大小與間距
+        const isMobile = window.innerWidth <= 768;
+        const ptToPx = 1.3333; // 1pt 約等於 1.3333px
+        const fontSizePt = isMobile ? 18 : 20; 
+        const fontSize = fontSizePt * ptToPx; // 轉換為 px
+        const lineGap = isMobile ? 22 : 28; // 句子間隔
         const colWidth = fontSize + lineGap;
+
+        let hasRequestedDeviceOrientation = false;
+
+        // 如果裝置不需手動請求權限 (例如 Android 或一般桌機)，直接預先監聽陀螺儀
+        if (window.DeviceOrientationEvent && typeof DeviceOrientationEvent.requestPermission !== 'function') {
+            window.addEventListener('deviceorientation', handleOrientation);
+            hasRequestedDeviceOrientation = true;
+        }
 
         // 初始化場景
         function init() {
@@ -95,10 +107,10 @@
                     let char = text[j];
                     
                     // 建立物理節點
-                    let body = Bodies.circle(0, j * fontSize, 14, {
+                    let body = Bodies.circle(0, j * fontSize, fontSize * 0.45, {
                         collisionFilter: { group: -1 }, // 設為同群組且負數值，讓所有字不互碰以避免糾纏
-                        frictionAir: 0.04, // 空氣阻力，讓擺動較自然
-                        restitution: 0.2, // 彈性
+                        frictionAir: 0.05, // 稍微增加一點空氣阻力讓擺動柔順
+                        restitution: 0.1, // 降低彈性
                         isStatic: j === 0 // 第一個字固定不動
                     });
                     body.char = char;
@@ -111,7 +123,7 @@
                             bodyA: prevBody,
                             bodyB: body,
                             length: fontSize * 0.9,
-                            stiffness: 0.8, // 繩子硬度
+                            stiffness: 0.1, // 大幅降低繩子硬度，變得更柔順
                             damping: 0.05 // 繩子阻尼
                         });
                         constraints.push(constraint);
@@ -174,7 +186,6 @@
         }
 
         // 點擊螢幕觸發功能 (包含要求 iOS 陀螺儀權限)
-        let hasRequestedDeviceOrientation = false;
         function handleScreenClick() {
             if (!hasRequestedDeviceOrientation && typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
                 DeviceOrientationEvent.requestPermission()
@@ -196,15 +207,19 @@
 
         // 陀螺儀重力處理
         function handleOrientation(event) {
-            let gx = event.gamma / 45; // 左右傾斜
-            let gy = event.beta / 45;  // 前後傾斜
+            let gamma = event.gamma || 0; // 左右傾斜
+            let beta = event.beta || 0;  // 前後傾斜
 
-            // 限制最大重力值
+            let gx = gamma / 45; 
+            let gy = beta / 45;
+
+            // 調整門簾擺動的靈敏度與最大值
             gx = Math.max(-1.5, Math.min(1.5, gx));
             gy = Math.max(-1.5, Math.min(1.5, gy));
 
-            engine.world.gravity.x = gx;
-            engine.world.gravity.y = gy;
+            engine.world.gravity.x = gx * 1.5;
+            // 確保重力大致向下，避免整個飛上去
+            engine.world.gravity.y = gy > 0 ? Math.max(0.2, gy * 1.5) : 0.2; 
         }
 
         // 根據直/橫畫面重新排列所有詩句的定位
@@ -297,16 +312,30 @@
             ctx.clearRect(0, 0, w, h);
 
             // 文字繪製設定
-            ctx.font = '400 24pt "BIZ UDPMincho", serif';
-            ctx.fillStyle = '#313131'; // 文字顏色
+            ctx.font = `400 ${fontSizePt}pt "BIZ UDPMincho", serif`;
+            ctx.fillStyle = '#e584b4'; // 文字顏色修改為粉色
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
 
             for (let line of linesData) {
-                for (let body of line.bodies) {
+                let bodies = line.bodies;
+                for (let j = 0; j < bodies.length; j++) {
+                    let body = bodies[j];
+                    let angle = 0;
+                    
+                    // 根據上下文字的相對位置計算旋轉角度，讓文字順著繩子方向排，看起來更柔順
+                    if (j < bodies.length - 1) {
+                        let nextBody = bodies[j+1];
+                        angle = Math.atan2(nextBody.position.y - body.position.y, nextBody.position.x - body.position.x) - Math.PI / 2;
+                    } else if (j > 0) {
+                        let prevBody = bodies[j-1];
+                        angle = Math.atan2(body.position.y - prevBody.position.y, body.position.x - prevBody.position.x) - Math.PI / 2;
+                    }
+
                     ctx.save();
                     ctx.translate(body.position.x, body.position.y);
-                    ctx.rotate(body.angle);
+                    // 將繩索角度與自身物理旋轉混合，增加擺動的順暢度與微小扭動感
+                    ctx.rotate(angle + (body.angle * 0.1));
                     ctx.fillText(body.char, 0, 0);
                     ctx.restore();
                 }
