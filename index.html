@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>doNotLiveInPoems | v1.9</title>
+    <title>doNotLiveInPoems | v2.0</title>
     <!-- 引入 Google Fonts: Chiron Sung HK -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -168,38 +168,87 @@
                 linesData.push({ bodies, constraints });
             }
 
-            // 加入滑鼠與觸控拖曳控制
-            const mouse = Mouse.create(canvas);
-            const mouseConstraint = MouseConstraint.create(engine, {
-                mouse: mouse,
-                constraint: {
-                    stiffness: 0.05, // 修改：滑鼠拉力調弱，確保拖曳時「繩子(1.0)」比「滑鼠(0.05)」硬，字距才不會被拉扯開
-                    render: { visible: false }
-                }
-            });
-            Composite.add(world, mouseConstraint);
+            // 移除舊有單點拖曳，加入大範圍滑動施力 (Swipe Force) 互動
+            let pointerDownPos = null;
+            let lastPointerPos = null;
 
-            // 處理 Retina 高解析度螢幕的滑鼠座標修正
-            const pixelRatio = window.devicePixelRatio || 1;
-            mouse.pixelRatio = pixelRatio;
+            // 計算並施加滑動力道 (範圍約三句)
+            function applySwipeForce(x, y, dx, dy) {
+                const radius = colWidth * 3.5; // 影響半徑設定為大約 3 到 4 句的寬度
+                const forceStrength = 0.00015; // 力道係數
 
-            // 辨識「點擊」與「拖曳」的差別
-            let dragStartPos = null;
-            Events.on(mouseConstraint, 'mousedown', function(event) {
-                dragStartPos = { x: event.mouse.position.x, y: event.mouse.position.y };
-            });
-            
-            Events.on(mouseConstraint, 'mouseup', function(event) {
-                if (!dragStartPos) return;
-                let dx = event.mouse.position.x - dragStartPos.x;
-                let dy = event.mouse.position.y - dragStartPos.y;
-                let dist = Math.sqrt(dx * dx + dy * dy);
-                
-                // 如果移動距離很短，判定為點擊，則亂數打亂順序
-                if (dist < 10) {
-                    handleScreenClick();
+                // 限制最大位移量，避免瞬間滑動太快導致力道爆炸
+                const maxDelta = 50;
+                dx = Math.max(-maxDelta, Math.min(maxDelta, dx));
+                dy = Math.max(-maxDelta, Math.min(maxDelta, dy));
+
+                for (let line of linesData) {
+                    // 從 1 開始，避免移動到第一顆固定的錨點
+                    for (let j = 1; j < line.bodies.length; j++) {
+                        let body = line.bodies[j];
+                        let dist = Math.hypot(body.position.x - x, body.position.y - y);
+
+                        if (dist < radius) {
+                            // 距離滑動軌跡越近，力量越強 (使用平方衰減讓邊緣過渡更柔和)
+                            let falloff = 1 - (dist / radius);
+                            falloff = falloff * falloff;
+                            
+                            Matter.Body.applyForce(body, body.position, {
+                                x: dx * forceStrength * falloff * body.mass,
+                                y: dy * forceStrength * falloff * body.mass
+                            });
+                        }
+                    }
                 }
-                dragStartPos = null;
+            }
+
+            // 滑鼠事件 (Hover 即可撥動)
+            canvas.addEventListener('mousedown', e => {
+                pointerDownPos = { x: e.clientX, y: e.clientY };
+                lastPointerPos = { x: e.clientX, y: e.clientY };
+            });
+            canvas.addEventListener('mousemove', e => {
+                if (lastPointerPos) {
+                    let dx = e.clientX - lastPointerPos.x;
+                    let dy = e.clientY - lastPointerPos.y;
+                    if (dx !== 0 || dy !== 0) applySwipeForce(e.clientX, e.clientY, dx, dy);
+                }
+                lastPointerPos = { x: e.clientX, y: e.clientY };
+            });
+            canvas.addEventListener('mouseleave', () => lastPointerPos = null);
+            canvas.addEventListener('mouseenter', e => lastPointerPos = { x: e.clientX, y: e.clientY });
+            window.addEventListener('mouseup', e => {
+                // 判斷是否為原地點擊
+                if (pointerDownPos) {
+                    let dist = Math.hypot(e.clientX - pointerDownPos.x, e.clientY - pointerDownPos.y);
+                    if (dist < 10) handleScreenClick();
+                }
+                pointerDownPos = null;
+            });
+
+            // 觸控事件 (手指滑動撥動)
+            canvas.addEventListener('touchstart', e => {
+                let touch = e.touches[0];
+                pointerDownPos = { x: touch.clientX, y: touch.clientY };
+                lastPointerPos = { x: touch.clientX, y: touch.clientY };
+            }, {passive: false});
+            canvas.addEventListener('touchmove', e => {
+                e.preventDefault(); // 阻止畫面跟著上下捲動
+                let touch = e.touches[0];
+                if (lastPointerPos) {
+                    let dx = touch.clientX - lastPointerPos.x;
+                    let dy = touch.clientY - lastPointerPos.y;
+                    if (dx !== 0 || dy !== 0) applySwipeForce(touch.clientX, touch.clientY, dx, dy);
+                }
+                lastPointerPos = { x: touch.clientX, y: touch.clientY };
+            }, {passive: false});
+            window.addEventListener('touchend', e => {
+                if (pointerDownPos && e.changedTouches) {
+                    let touch = e.changedTouches[0];
+                    let dist = Math.hypot(touch.clientX - pointerDownPos.x, touch.clientY - pointerDownPos.y);
+                    if (dist < 10) handleScreenClick();
+                }
+                pointerDownPos = null;
             });
 
             // 初始佈局更新
