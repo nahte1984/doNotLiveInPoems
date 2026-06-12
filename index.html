@@ -25,6 +25,7 @@
             display: block;
             width: 100%;
             height: 100%;
+            transition: opacity 0.25s ease-in-out; /* 新增漸變過渡 */
         }
         #loading {
             position: absolute;
@@ -57,7 +58,7 @@
 <body>
 
     <div id="loading">載入中...</div>
-    <div id="start-overlay">點擊畫面開始體驗</div>
+    <div id="start-overlay">《#請勿活在詩裡》</div>
     <canvas id="world"></canvas>
 
     <script>
@@ -135,8 +136,8 @@
                             bodyA: prevBody,
                             bodyB: body,
                             length: fontSize * 0.9,
-                            stiffness: 0.5, // 修正：稍微提高硬度以避免重力導致異常下墜，但保留足夠的柔順感
-                            damping: 0.05 // 繩子阻尼
+                            stiffness: 1, // 修改：設定極高硬度以防止字距拉長
+                            damping: 0.1 // 提高阻尼避免抖動
                         });
                         constraints.push(constraint);
                         Composite.add(world, constraint);
@@ -151,7 +152,7 @@
             const mouseConstraint = MouseConstraint.create(engine, {
                 mouse: mouse,
                 constraint: {
-                    stiffness: 0.2,
+                    stiffness: 0.05, // 修改：滑鼠拉力調弱，確保拖曳時「繩子(1.0)」比「滑鼠(0.05)」硬，字距才不會被拉扯開
                     render: { visible: false }
                 }
             });
@@ -184,6 +185,63 @@
             updateLayout();
             window.addEventListener('resize', updateLayout);
 
+            // 加入微風效果與拖曳角度限制
+            let windTime = 0;
+            Events.on(engine, 'beforeUpdate', function() {
+                windTime += 0.02;
+                // 隨機微風力道 (由兩個正弦波疊加)，力道調弱至四分之一
+                let windForceX = (Math.sin(windTime) * 0.0003 + Math.sin(windTime * 2.1) * 0.00015) * 0.25;
+                let maxStretch = fontSize * 0.95; // 限制最大長度
+
+                for (let line of linesData) {
+                    let bodies = line.bodies;
+                    for (let j = 1; j < bodies.length; j++) {
+                        let prev = bodies[j-1];
+                        let curr = bodies[j];
+
+                        // --- 1. 施加隨機微風 ---
+                        // 越下方的字元受風力影響越大
+                        let forceMultiplier = j / bodies.length;
+                        Matter.Body.applyForce(curr, curr.position, {
+                            x: windForceX * forceMultiplier * curr.mass,
+                            y: 0
+                        });
+
+                        // --- 2. 限制拖曳角度 (不可超過 60 度) 與 強制防拉長 ---
+                        let dx = curr.position.x - prev.position.x;
+                        let dy = curr.position.y - prev.position.y;
+                        let angle = Math.atan2(dy, dx);
+                        let dist = Math.sqrt(dx*dx + dy*dy);
+
+                        // 基準向下為 Math.PI/2，左右各 60 度 (即 PI/3)
+                        let minAngle = Math.PI / 2 - Math.PI / 3; 
+                        let maxAngle = Math.PI / 2 + Math.PI / 3;
+
+                        let clampedAngle = angle;
+                        if (dy < 0) {
+                            // 若被往上拉，強制限縮在 60 度邊緣
+                            clampedAngle = dx > 0 ? minAngle : maxAngle;
+                        } else if (angle < minAngle) {
+                            clampedAngle = minAngle;
+                        } else if (angle > maxAngle) {
+                            clampedAngle = maxAngle;
+                        }
+
+                        let clampedDist = Math.min(dist, maxStretch);
+
+                        // 若角度或距離被限制，強制覆寫位置
+                        if (clampedAngle !== angle || dist > clampedDist) {
+                            Matter.Body.setPosition(curr, {
+                                x: prev.position.x + Math.cos(clampedAngle) * clampedDist,
+                                y: prev.position.y + Math.sin(clampedAngle) * clampedDist
+                            });
+                            // 稍微降低速度以減少因強制位移產生的物理抖動
+                            Matter.Body.setVelocity(curr, { x: curr.velocity.x * 0.8, y: curr.velocity.y * 0.8 });
+                        }
+                    }
+                }
+            });
+
             // 啟動物理引擎計算與自定義繪製
             Runner.run(Runner.create(), engine);
             requestAnimationFrame(renderLoop);
@@ -199,8 +257,15 @@
 
         // 點擊螢幕觸發功能 (包含要求 iOS 陀螺儀權限)
         function handleScreenClick() {
-            shuffleArray(currentOrder);
-            updateLayout();
+            // 加入淡出淡入轉場效果 (Fade out 保持 0.25s -> Shuffle -> Fade in 延長為 0.5s)
+            canvas.style.transitionDuration = '0.25s';
+            canvas.style.opacity = '0';
+            setTimeout(() => {
+                shuffleArray(currentOrder);
+                updateLayout();
+                canvas.style.transitionDuration = '0.5s';
+                canvas.style.opacity = '1';
+            }, 250); // 250ms 消失後執行
         }
 
         // 陀螺儀重力處理
