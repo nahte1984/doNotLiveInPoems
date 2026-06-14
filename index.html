@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>doNotLiveInPoems | v2.2</title>
+    <title>doNotLiveInPoems | v2.3</title>
     <!-- 引入 Google Fonts: Chiron Sung HK -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -477,16 +477,17 @@
             rainCtx.lineWidth = 1;
             rainCtx.beginPath();
             
-            // 隨機生成新的雨滴 (控制密度)
+            // 隨機生成新的雨滴 (控制密度，機率降為原本的一半)
             let dropsPerFrame = isMobile ? 1 : 2;
             for(let k = 0; k < dropsPerFrame; k++) {
-                if(Math.random() < 0.6) {
+                if(Math.random() < 0.3) { // 機率從 0.6 降為 0.3
                     raindrops.push({
                         // 為了應付陀螺儀帶來的劇烈偏移，將生成範圍擴大到螢幕外
                         x: Math.random() * (w * 1.5) - (w * 0.25),
                         y: -60, // 因應長度增加，將生成點再往上拉高
                         length: Math.random() * 49 + 1, // 長度限制改為 1px ~ 50px
-                        speed: Math.random() * 1.5 + 1.5  // 墜落速度再減慢至原本的一半
+                        speed: Math.random() * 1.5 + 1.5, // 墜落速度
+                        gyroVx: currentGx * 1.5 // 記錄生成瞬間的陀螺儀偏移量，後續不再改變
                     });
                 }
             }
@@ -498,8 +499,8 @@
             for (let i = raindrops.length - 1; i >= 0; i--) {
                 let drop = raindrops[i];
                 
-                // 受陀螺儀影響的 X 軸偏移量 (影響減弱至十分之一) + 預設自然微風
-                let vx = currentGx * 1.5 + baseWind; 
+                // 受陀螺儀影響的 X 軸偏移量 (僅套用出生時紀錄的 gyroVx) + 預設自然微風
+                let vx = drop.gyroVx + baseWind; 
                 let vy = drop.speed;
                 
                 drop.x += vx;
