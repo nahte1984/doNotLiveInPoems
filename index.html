@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>doNotLiveInPoems | v2.0</title>
+    <title>doNotLiveInPoems | v2.1</title>
     <!-- 引入 Google Fonts: Chiron Sung HK -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -21,10 +21,24 @@
             touch-action: none; /* 防止在手機上滑動畫面 */
             font-family: 'Chiron Sung HK', serif;
         }
-        #world {
-            display: block;
+        /* 細雨畫布置於底層 */
+        #rain-canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
             width: 100%;
             height: 100%;
+            z-index: 1;
+            pointer-events: none; /* 不干擾滑鼠/觸控事件 */
+        }
+        /* 詩句畫布置於上層 */
+        #world {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 2;
             transition: opacity 0.25s ease-in-out; /* 新增漸變過渡 */
         }
         #loading {
@@ -36,6 +50,7 @@
             font-size: 24pt;
             pointer-events: none;
             transition: opacity 0.5s ease;
+            z-index: 3;
         }
         #start-overlay {
             position: absolute;
@@ -80,6 +95,9 @@
     <div id="start-overlay">
         <div class="start-btn-container">《<span class="underline-target">#請勿活在詩裡</span>》</div>
     </div>
+    
+    <!-- 兩層畫布，確保點擊過渡效果不影響細雨 -->
+    <canvas id="rain-canvas"></canvas>
     <canvas id="world"></canvas>
 
     <script>
@@ -104,6 +122,10 @@
 
         const canvas = document.getElementById('world');
         const ctx = canvas.getContext('2d');
+        
+        // 細雨專用畫布
+        const rainCanvas = document.getElementById('rain-canvas');
+        const rainCtx = rainCanvas.getContext('2d');
 
         // 詩句資料
         const originalSentences = [
@@ -119,6 +141,10 @@
 
         let linesData = [];
         let currentOrder = [0, 1, 2, 3, 4, 5, 6, 7];
+        
+        // 細雨資料
+        let raindrops = [];
+        let currentGx = 0; // 紀錄陀螺儀X軸偏移量，用於細雨方向
 
         // 判斷是否為手機版並設定文字大小與間距
         const isMobile = window.innerWidth <= 768;
@@ -316,6 +342,7 @@
         // 點擊螢幕觸發功能 (包含要求 iOS 陀螺儀權限)
         function handleScreenClick() {
             // 加入淡出淡入轉場效果 (Fade out 保持 0.25s -> Shuffle -> Fade in 延長為 0.5s)
+            // 由於只針對 #world 畫布設定，細雨畫布 #rain-canvas 不受影響
             canvas.style.transitionDuration = '0.25s';
             canvas.style.opacity = '0';
             setTimeout(() => {
@@ -337,6 +364,9 @@
             // 調整門簾擺動的靈敏度與最大值
             gx = Math.max(-1.5, Math.min(1.5, gx));
             gy = Math.max(-1.5, Math.min(1.5, gy));
+            
+            // 儲存 X 軸偏移供背景細雨使用
+            currentGx = gx;
 
             engine.world.gravity.x = gx * 1.5;
             // 確保重力大致向下，避免整個飛上去
@@ -349,12 +379,19 @@
             const h = window.innerHeight;
             const pixelRatio = window.devicePixelRatio || 1;
 
-            // 設定 Canvas 高清解析度
+            // 設定詩句畫布解析度
             canvas.width = w * pixelRatio;
             canvas.height = h * pixelRatio;
             canvas.style.width = w + 'px';
             canvas.style.height = h + 'px';
             ctx.scale(pixelRatio, pixelRatio);
+            
+            // 設定細雨畫布解析度
+            rainCanvas.width = w * pixelRatio;
+            rainCanvas.height = h * pixelRatio;
+            rainCanvas.style.width = w + 'px';
+            rainCanvas.style.height = h + 'px';
+            rainCtx.scale(pixelRatio, pixelRatio);
 
             let isPortrait = h >= w;
 
@@ -431,10 +468,63 @@
             const h = window.innerHeight;
 
             ctx.clearRect(0, 0, w, h);
+            rainCtx.clearRect(0, 0, w, h);
 
-            // 文字繪製設定
+            // =========================
+            // 繪製背景：下雨效果
+            // =========================
+            rainCtx.strokeStyle = '#e584b4';
+            rainCtx.lineWidth = 1;
+            rainCtx.beginPath();
+            
+            // 隨機生成新的雨滴 (控制密度)
+            let dropsPerFrame = isMobile ? 1 : 2;
+            for(let k = 0; k < dropsPerFrame; k++) {
+                if(Math.random() < 0.6) {
+                    raindrops.push({
+                        // 為了應付陀螺儀帶來的劇烈偏移，將生成範圍擴大到螢幕外
+                        x: Math.random() * (w * 1.5) - (w * 0.25),
+                        y: -60, // 因應長度增加，將生成點再往上拉高
+                        length: Math.random() * 49 + 1, // 長度限制改為 1px ~ 50px
+                        speed: Math.random() * 3 + 3  // 墜落速度減慢至原本的一半 (從 6~12 降為 3~6)
+                    });
+                }
+            }
+
+            // 產生微微的自然風，讓沒有陀螺儀的設備也能看到飄動的視覺效果
+            let baseWind = Math.sin(Date.now() * 0.0005) * 1.5 + Math.sin(Date.now() * 0.0002) * 0.5;
+
+            // 更新並繪製所有雨滴
+            for (let i = raindrops.length - 1; i >= 0; i--) {
+                let drop = raindrops[i];
+                
+                // 受陀螺儀影響的 X 軸偏移量 + 預設自然微風
+                let vx = currentGx * 15 + baseWind; 
+                let vy = drop.speed;
+                
+                drop.x += vx;
+                drop.y += vy;
+                
+                // 計算線條角度，使其頭尾對齊墜落方向
+                let angle = Math.atan2(vy, vx);
+                let endX = drop.x - Math.cos(angle) * drop.length;
+                let endY = drop.y - Math.sin(angle) * drop.length;
+                
+                rainCtx.moveTo(drop.x, drop.y);
+                rainCtx.lineTo(endX, endY);
+                
+                // 移除離開畫面太遠的雨滴
+                if (drop.y > h + 50 || drop.x < -100 || drop.x > w + 100) {
+                    raindrops.splice(i, 1);
+                }
+            }
+            rainCtx.stroke();
+
+
+            // =========================
+            // 繪製前景：文字門簾
+            // =========================
             ctx.font = `400 ${fontSizePt}pt "Chiron Sung HK", serif`;
-            ctx.fillStyle = '#e584b4'; // 文字顏色修改為粉色
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
 
@@ -444,7 +534,7 @@
                     let body = bodies[j];
                     let angle = 0;
                     
-                    // 根據上下文字的相對位置計算旋轉角度，讓文字順著繩子方向排，看起來更柔順
+                    // 根據上下文字的相對位置計算旋轉角度，讓文字順著繩子方向排
                     if (j < bodies.length - 1) {
                         let nextBody = bodies[j+1];
                         angle = Math.atan2(nextBody.position.y - body.position.y, nextBody.position.x - body.position.x) - Math.PI / 2;
@@ -453,10 +543,12 @@
                         angle = Math.atan2(body.position.y - prevBody.position.y, body.position.x - prevBody.position.x) - Math.PI / 2;
                     }
 
+                    let finalAngle = angle + (body.angle * 0.1);
+
                     ctx.save();
                     ctx.translate(body.position.x, body.position.y);
-                    // 將繩索角度與自身物理旋轉混合，增加擺動的順暢度與微小扭動感
-                    ctx.rotate(angle + (body.angle * 0.1));
+                    ctx.rotate(finalAngle);
+                    ctx.fillStyle = '#e584b4';
                     ctx.fillText(body.char, 0, 0);
                     ctx.restore();
                 }
